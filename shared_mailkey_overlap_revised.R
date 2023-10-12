@@ -62,11 +62,11 @@ campaigns.shared <- campaigns.shared %>%
 
 # Set parameters that will determine what overlap we want -----------------
 # campaign ID of the campaign of interest; reference this
-recentCamp <- "SLMS163"
+recentCamp <- "SLMS158"
 
 natlOnly <- FALSE
-citiesOnly <- TRUE
-recentMarket <- FALSE
+citiesOnly <- FALSE
+recentMarket <- TRUE
 default <- FALSE
 
 # safety check
@@ -106,45 +106,39 @@ if (citiesOnly) {
 }
 
 if (recentMarket) {
-# if you want to retain the most recent corresponding market, run this chunk ---
-
+  # if you want to retain the most recent corresponding market, run this chunk ---
+  
   sharedType_recent <- gsub("[^A-Za-z]", "", unique(mailing_recent$campaign_name))
-
+  
   mailingsForComparions <- mailingsForComparions %>%
     mutate(sharedType = gsub("[^A-Za-z]","", campaign_name)) %>%
     filter(grepl(sharedType_recent, sharedType))
-
-  recent_mailkeys <- mailFiles %>%
-    filter(print_job_number %in% !!mailing_recent$print_job_number) %>%
-    select(addresshash, misc, 
-           print_job_number) %>%
-    distinct(misc) %>%
-    collect() %>%
-    mutate(tmp.id = gsub("(SLMS.*-)+?", "", misc),
-           slm_id = gsub("\\-.*","", misc)) %>%
+  
+  recent_mailkeys <- mailing_recent %>%
+    distinct(slm_id, .keep_all = TRUE) %>%
+    mutate(tmp.id = gsub("(SLMS.*-)+?", "", slm_id)
+           ,
+           camp_id = gsub("\\-.*","", slm_id)
+    ) %>%
     filter(!tmp.id == "SEED") %>%
     left_join(select(mailing_recent, slm_id,
                      # print_job_number,
                      inHomeDate= expected_in_homes, opportunity_name = campaign_name))
-
-  old_mailkeys <- mailFiles %>%
-    filter(print_job_number %in% !!mailing_old$print_job_number) %>%
-    select(addresshash, misc, print_job_number) %>%
-    group_by(misc) %>%
-    slice_sample(n = 1) %>%
-    collect() %>%
-    mutate(tmp.id = gsub("(SLMS.*-)+?", "", misc),
-           slm_id = gsub("\\-.*","", misc)) %>%
+  
+  old_mailkeys <- mailingsForComparions %>%
+    distinct(slm_id, .keep_all = TRUE) %>%
+    mutate(tmp.id = gsub("(SLMS.*-)+?", "", slm_id),
+           camp_id = gsub("\\-.*","", slm_id)) %>%
     filter(!tmp.id == "SEED") %>%
-    left_join(select(mailing_old, slm_id,
+    left_join(select(mailingsForComparions, slm_id,
                      # print_job_number,
                      inHomeDate= expected_in_homes, opportunity_name = campaign_name))
   
-  old_mailkeys_recent <- old_mailkeys %>%
+  mailingsForComparions <- old_mailkeys %>%
     filter(tmp.id %in% recent_mailkeys$tmp.id) %>%
     group_by(tmp.id) %>%
     filter(inHomeDate == max(inHomeDate))
-
+  
 }
 
 if (default) {
@@ -186,8 +180,8 @@ mailingCirc_recent <- dat_recent %>% count(misc, opportunity_name)
 # older campaigns
 if (recentMarket) {
   dat_old <- mailFiles %>%
-    filter(print_job_number %in% !!old_mailkeys_recent$print_job_number &
-             misc %in% !!old_mailkeys_recent$misc) %>%
+    filter(print_job_number %in% !!mailingsForComparions$print_job_number &
+             misc %in% !!mailingsForComparions$slm_id) %>%
     select(misc, print_job_number,
            address_hash_v2) %>%
     collect()
@@ -208,7 +202,7 @@ dat_old <- dat_old %>%
 
 # safety check
 if (recentMarket) {
-  if(length(setdiff(unique(old_mailkeys_recent$slm_id), unique(dat_old$slm_id))) > 0) {
+  if(length(setdiff(unique(mailingsForComparions$slm_id), unique(dat_old$misc))) > 0) {
     stop(glue("The data for the following campaign doesn't exist in the mailing table yet:
             {setdiff(unique(mailing_old$slm_id), unique(dat_old$slm_id))}"))
   }
@@ -219,7 +213,7 @@ if (recentMarket) {
   }
 }
 
-  
+
 dat_old <- dat_old %>%
   left_join(select(mailingsForComparions, slm_id,
                    # print_job_number,
@@ -240,8 +234,8 @@ dat_old <- dat_old %>%
   distinct(opportunity_name, address_hash_v2, .keep_all = TRUE)
 
 dat_old_split <- dat_old %>%
-    as.data.table() %>%
-    split(by = "opportunity_name")
+  as.data.table() %>%
+  split(by = "opportunity_name")
 
 
 overlap <- lapply(dat_old_split, function(x, y = dat_recent){
@@ -249,7 +243,7 @@ overlap <- lapply(dat_old_split, function(x, y = dat_recent){
     select(c(address_hash_v2, misc_old = misc, opportunity_name)) %>%
     inner_join(select(y,c(address_hash_v2, misc_new = misc, opportunity_name)),
                by = "address_hash_v2")
-  })
+})
 
 
 # overlap_automate <- function(x, y) {
@@ -274,8 +268,8 @@ overlap_summ <- overlap %>%
          slm_id_old = gsub("(-)+?.*", "", misc_old))
 
 overlap_summ_split <- overlap_summ %>%
-    as.data.table() %>%
-    split(by = "slm_id_old")
+  as.data.table() %>%
+  split(by = "slm_id_old")
 
 overlap_summ_wide <- lapply(overlap_summ_split, function(x){
   x %>%
@@ -302,7 +296,7 @@ heatmapPlot <- function(a) {
                                # ,
                                # limits = c(floor(min(a$overlap_pct)), ceiling(max(a$overlap_pct))),
                                # breaks = seq(floor(min(a$overlap_pct)), ceiling(max(a$overlap_pct)), length.out = 5)
-                               ) +
+          ) +
           labs(x = unique(a$opportunity_name_new),
                y = unique(a$opportunity_name_old),
                title = "Mailkey overlap between shared campaigns") +
@@ -320,11 +314,22 @@ plotOutputs <- lapply(overlap_summ_split, heatmapPlot)
 
 
 # Write outputs -----------------------------------------------------------
+
+# check if directory exists; if not, create it here
+outputPath <- c("grid_output", "ggplots")
+
+lapply(outputPath, function(x) {
+  if (!exists(x)) {
+    dir.create(x)
+  }
+})
+
+
 lapply(names(overlap_summ_split), function(x) {
-  fwrite(overlap_summ_split[[x]], glue("grid_output/{recentCamp}_{x}_mailkey_overlap.csv"))
+  fwrite(overlap_summ_split[[x]], glue("{outputPath[1]}/{recentCamp}_{x}_mailkey_overlap.csv"))
 })
 
 lapply(names(plotOutputs), function(x) {
-  ggsave(glue("ggplots/{recentCamp}_{x}_mailkey_overlap.png"), width = 20, height = 10)
+  ggsave(glue("{outputPath[2]}/{recentCamp}_{x}_mailkey_overlap.png"), width = 20, height = 10)
 })
 
